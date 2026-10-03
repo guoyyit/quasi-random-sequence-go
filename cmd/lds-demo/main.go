@@ -5,10 +5,32 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 
 	"github.com/guoyyit/quasi-random-sequence-go/lds"
 )
+
+// validatePoints enforces the strict guarantees before any point is printed:
+// every coordinate must lie strictly inside the unit hypercube (0 < x < 1) and
+// no point may appear twice. A violation aborts the program so that illegal
+// points are never displayed.
+func validatePoints(points [][]float64) error {
+	seen := make(map[string]bool)
+	for _, p := range points {
+		for _, x := range p {
+			if x <= 0.0 || x >= 1.0 || math.IsNaN(x) || math.IsInf(x, 0) {
+				return fmt.Errorf("lds-demo: point coordinate out of (0,1): %v", p)
+			}
+		}
+		key := fmt.Sprintf("%v", p)
+		if seen[key] {
+			return fmt.Errorf("lds-demo: duplicate point: %v", p)
+		}
+		seen[key] = true
+	}
+	return nil
+}
 
 func main() {
 	const (
@@ -33,6 +55,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "generate %s: %v\n", c.name, err)
 			os.Exit(1)
 		}
+		if err := validatePoints(points); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		m, err := lds.Assess(points)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "assess %s: %v\n", c.name, err)
@@ -47,6 +73,10 @@ func main() {
 		cfg := lds.Config{Kind: lds.Halton, Dim: dim, Scramble: true, Seed: 42, Stream: stream}
 		p, err := lds.Generate(cfg, 1)
 		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := validatePoints(p); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

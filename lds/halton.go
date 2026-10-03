@@ -27,29 +27,27 @@ func (g *haltonGen) pointAt(i int) []float64 {
 	point := make([]float64, g.cfg.Dim)
 	for d, base := range g.bases {
 		x := i
-		// Collect base-b digits, most significant first. The radical inverse
-		// is an exact rational num/base^k; dividing integer numerator by
-		// integer denominator once gives the correctly rounded float64 (and
-		// stays identical between incremental and batch generation).
+		// Collect base-b digits, least significant first.
 		var digits []int
-		pos := 0
 		for x > 0 {
-			digit := x % base
+			digits = append(digits, x%base)
 			x /= base
-			if g.perms != nil {
-				digit = g.perms.perm(base, d, pos)[digit]
+		}
+		if g.perms != nil {
+			// Full Owen scramble including the infinite tail: the tail keeps
+			// the coordinate strictly inside (0,1) and prevents collisions.
+			point[d] = scrambledValue(g.perms, base, d, digits)
+		} else {
+			// Unscrambled: exact rational num/base^k. Dividing integer
+			// numerator by integer denominator once gives the correctly
+			// rounded float64, identical between incremental and batch.
+			var num, den int64 = 0, 1
+			for _, digit := range digits {
+				num = num*int64(base) + int64(digit)
+				den *= int64(base)
 			}
-			digits = append(digits, digit)
-			pos++
+			point[d] = float64(num) / float64(den)
 		}
-		var num, den int64 = 0, 1
-		// digits are least significant first; Horner over them in that order
-		// yields numerator a0*b^(k-1) + a1*b^(k-2) + ... + a(k-1).
-		for j := 0; j < len(digits); j++ {
-			num = num*int64(base) + int64(digits[j])
-			den *= int64(base)
-		}
-		point[d] = float64(num) / float64(den)
 	}
 	return point
 }
@@ -111,23 +109,27 @@ func (g *faureGen) pointAt(i int) []float64 {
 	point := make([]float64, g.cfg.Dim)
 	for d := 0; d < g.cfg.Dim; d++ {
 		m := g.mats[d]
-		// Output digits from most significant matrix row to least significant;
-		// the resulting value is the exact rational num/b^k.
-		var num, den int64 = 0, 1
+		// Output digits y = M a mod b, least significant first.
+		y := make([]int, k)
 		for row := 0; row < k; row++ {
-			y := 0
+			v := 0
 			baseRow := row * k
 			for col := row; col < k; col++ {
-				y += m[baseRow+col] * a[col]
+				v += m[baseRow+col] * a[col]
 			}
-			y %= b
-			if g.perms != nil {
-				y = g.perms.perm(b, d, row)[y]
-			}
-			num = num*int64(b) + int64(y)
-			den *= int64(b)
+			y[row] = v % b
 		}
-		point[d] = float64(num) / float64(den)
+		if g.perms != nil {
+			point[d] = scrambledValue(g.perms, b, d, y)
+		} else {
+			// Unscrambled: exact rational num/b^k.
+			var num, den int64 = 0, 1
+			for _, v := range y {
+				num = num*int64(b) + int64(v)
+				den *= int64(b)
+			}
+			point[d] = float64(num) / float64(den)
+		}
 	}
 	return point
 }

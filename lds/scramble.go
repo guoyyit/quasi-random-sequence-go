@@ -1,6 +1,9 @@
 package lds
 
-import "sync"
+import (
+	"math"
+	"sync"
+)
 
 // permTables stores deterministic digit permutations used to scramble
 // radical-inverse / digital sequences (Kocis-Owen style scrambling).
@@ -15,6 +18,9 @@ type permTables struct {
 
 	mu    sync.RWMutex
 	cache map[uint64][]int
+
+	tailMu sync.Mutex
+	tails  map[uint64]float64
 }
 
 func newPermTables(seed uint64, stream int) *permTables {
@@ -22,7 +28,59 @@ func newPermTables(seed uint64, stream int) *permTables {
 		seed:   seed,
 		stream: stream,
 		cache:  make(map[uint64][]int),
+		tails:  make(map[uint64]float64),
 	}
+}
+
+// tail returns the infinite Owen-scrambling tail for digit positions at and
+// above start:
+//
+//	T(start) = sum_{j=start}^{inf} perm_j(0) / base^{j+1}.
+//
+// The tail is what keeps a scrambled point strictly inside the unit
+// hypercube: even when every leading digit permutes to 0, the tail is a
+// strictly positive random value, so the coordinate never collapses to 0 and
+// distinct indices never collide. The result is deterministic and cached per
+// (seed, stream, base, dim, start).
+func (p *permTables) tail(base, dim, start int) float64 {
+	key := mixKey(p.seed, p.stream, base, dim, start)
+	p.tailMu.Lock()
+	defer p.tailMu.Unlock()
+	if t, ok := p.tails[key]; ok {
+		return t
+	}
+	t := 0.0
+	weight := math.Pow(1.0/float64(base), float64(start+1))
+	tailBound := weight
+	for j := start; j < start+200; j++ {
+		perm := p.perm(base, dim, j)
+		t += float64(perm[0]) * weight
+		if t+tailBound == t { // remaining tail is below 0.5 ulp of t
+			break
+		}
+		weight /= float64(base)
+		tailBound = weight
+	}
+	p.tails[key] = t
+	return t
+}
+
+// scrambledValue computes the full Owen-scrambled value for the output digit
+// vector y (least significant digit first). The first len(y) digits are
+// permuted; the infinite tail (positions >= len(y), whose unpermuted digits
+// are all 0) is added as well. The tail guarantees the result is never
+// exactly 0 and distinct indices never collide, even for base 2 where the
+// leading digit permutation alone would be trivial.
+func scrambledValue(perms *permTables, base, dim int, y []int) float64 {
+	k := len(y)
+	var num, den int64 = 0, 1
+	for j := 0; j < k; j++ {
+		num = num*int64(base) + int64(perms.perm(base, dim, j)[y[j]])
+		den *= int64(base)
+	}
+	sum := float64(num) / float64(den)
+	sum += perms.tail(base, dim, k)
+	return sum
 }
 
 // perm returns the scrambling permutation for dimension d at digit position
