@@ -9,12 +9,21 @@ type haltonGen struct {
 	cfg   Config
 	perms *permTables
 	bases []int
+	// digits[d] is the fixed number of base-bases[d] digits used for every
+	// point. Fixed precision keeps the digit-wise scrambling a bijection over
+	// all supported indices (no short-index points collapsing onto long ones)
+	// and leaves unscrambled rational values bit-for-bit unchanged.
+	digits []int
 }
 
 func newHalton(cfg Config) (*haltonGen, error) {
 	bases := make([]int, cfg.Dim)
 	copy(bases, firstPrimes[:cfg.Dim])
-	g := &haltonGen{cfg: cfg, bases: bases}
+	digits := make([]int, cfg.Dim)
+	for d, base := range bases {
+		digits[d] = digitsInBase(maxGenerateSamples, base)
+	}
+	g := &haltonGen{cfg: cfg, bases: bases, digits: digits}
 	if cfg.Scramble {
 		g.perms = newPermTables(cfg.Seed, cfg.Stream)
 	}
@@ -27,29 +36,29 @@ func (g *haltonGen) pointAt(i int) []float64 {
 	point := make([]float64, g.cfg.Dim)
 	for d, base := range g.bases {
 		x := i
-		// Collect base-b digits, most significant first. The radical inverse
-		// is an exact rational num/base^k; dividing integer numerator by
-		// integer denominator once gives the correctly rounded float64 (and
-		// stays identical between incremental and batch generation).
-		var digits []int
-		pos := 0
-		for x > 0 {
+		// Fixed number of digits, least significant first. The radical
+		// inverse is an exact rational num/base^K; dividing the integer
+		// numerator by the integer denominator once gives the correctly
+		// rounded float64 and stays identical between incremental and batch
+		// generation. Leading (least significant) zero digits permute to some
+		// digit instead of truncating, so scrambled points never collapse.
+		var num, den int64 = 0, 1
+		for pos := 0; pos < g.digits[d]; pos++ {
 			digit := x % base
 			x /= base
 			if g.perms != nil {
 				digit = g.perms.perm(base, d, pos)[digit]
 			}
-			digits = append(digits, digit)
-			pos++
-		}
-		var num, den int64 = 0, 1
-		// digits are least significant first; Horner over them in that order
-		// yields numerator a0*b^(k-1) + a1*b^(k-2) + ... + a(k-1).
-		for j := 0; j < len(digits); j++ {
-			num = num*int64(base) + int64(digits[j])
+			num = num*int64(base) + int64(digit)
 			den *= int64(base)
 		}
-		point[d] = float64(num) / float64(den)
+		if g.perms != nil {
+			// Lift the exact grid fraction into the open cube: the shift is
+			// parameter-specific, so distinct streams/seeds cannot coincide.
+			point[d] = (float64(num) + interiorShift(g.cfg.Seed, g.cfg.Stream, base, d, int(den))) / float64(den)
+		} else {
+			point[d] = float64(num) / float64(den)
+		}
 	}
 	return point
 }
@@ -127,7 +136,13 @@ func (g *faureGen) pointAt(i int) []float64 {
 			num = num*int64(b) + int64(y)
 			den *= int64(b)
 		}
-		point[d] = float64(num) / float64(den)
+		if g.perms != nil {
+			// Keep the scrambled fraction strictly inside (0,1) and disjoint
+			// across streams/seeds (see haltonGen.pointAt for rationale).
+			point[d] = (float64(num) + interiorShift(g.cfg.Seed, g.cfg.Stream, b, d, int(den))) / float64(den)
+		} else {
+			point[d] = float64(num) / float64(den)
+		}
 	}
 	return point
 }
